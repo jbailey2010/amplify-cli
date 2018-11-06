@@ -1,0 +1,26 @@
+{
+  "name": "graphql-relational-schema-transformer",
+  "version": "1.0.0",
+  "description": "An AppSync model transform that takes a relational database and turns that into a GraphQL schema document.",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf ./lib"
+  },
+  "keywords": [
+    "graphql",
+    "appsync",
+    "aws"
+  ],
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "graphql": "^0.13.2",
+    "mysql": "^2.16.0"
+  },
+  "devDependencies": {
+    "@types/mysql": "^2.15.5",
+    "typescript": "^3.1.2",
+    "@types/graphql": "^14.0.3"
+  }
+}
