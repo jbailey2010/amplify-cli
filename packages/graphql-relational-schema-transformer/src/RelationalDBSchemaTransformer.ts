@@ -1,5 +1,7 @@
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, OperationTypeDefinitionNode, SchemaDefinitionNode } from 'graphql'
+import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
+    OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
+    OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
 
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
@@ -54,6 +56,7 @@ export class RelationalDBSchemaTransformer {
         // Generate the mutations and queries based on the table structures
         types.push(this.getMutations(typeContexts))
         types.push(this.getQueries(typeContexts))
+        types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
 
         const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
@@ -66,7 +69,8 @@ export class RelationalDBSchemaTransformer {
             kind: Kind.SCHEMA_DEFINITION,
             operationTypes: [
                 this.getOperationTypeDefinition('query', this.getNamedType('Query')),
-                this.getOperationTypeDefinition('mutation', this.getNamedType('Mutation'))
+                this.getOperationTypeDefinition('mutation', this.getNamedType('Mutation')),
+                this.getOperationTypeDefinition('subscription', this.getNamedType('Subscription'))
             ]
         }
     }
@@ -79,22 +83,35 @@ export class RelationalDBSchemaTransformer {
                 this.getOperationFieldDefinition(`delete${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
                         typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
             fields.push(
                 this.getOperationFieldDefinition(`create${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Create${type.name.value}Input`)),
                         `create${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
             fields.push(
                 this.getOperationFieldDefinition(`update${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Update${type.name.value}Input`)),
                         `update${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
         }
         return this.getTypeDefinition(fields, 'Mutation')
+    }
+
+    private getSubscriptions(types: TableContext[]): ObjectTypeDefinitionNode {
+        const fields = []
+        for (const typeContext of types) {
+            const type = typeContext.tableTypeDefinition
+            fields.push(
+                this.getOperationFieldDefinition(`onCreate${type.name.value}`, [],
+                    this.getNamedType(`${type.name.value}`),
+                    [this.getDirectiveNode(`create${type.name.value}`)])
+            )
+        }
+        return this.getTypeDefinition(fields, 'Subscription')
     }
 
     private getQueries(types: TableContext[]): ObjectTypeDefinitionNode {
@@ -105,12 +122,12 @@ export class RelationalDBSchemaTransformer {
                 this.getOperationFieldDefinition(`get${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
                             typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
                 )
             fields.push(
                 this.getOperationFieldDefinition(`list${type.name.value}s`,
                     [this.getInputValueDefinition(this.getNamedType('String'), 'nextToken')],
-                    this.getNamedType(`${type.name.value}Connection`))
+                    this.getNamedType(`${type.name.value}Connection`), null)
                 )
             }
         return this.getTypeDefinition(fields, 'Query')
@@ -157,6 +174,7 @@ export class RelationalDBSchemaTransformer {
             // Update<type>Input has only the primary key as required, ignoring all other that the database requests as non-nullable
             const updateType = !isPrimaryKey ? baseType : this.getNonNullType(baseType)
             updateFields.push(this.getFieldDefinition(columnDescription.Field, updateType))
+
             // TODO: foreign key backwards to get nested types?
         }        
         return new TableContext(this.getTypeDefinition(fields, tableName), 
@@ -199,7 +217,7 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
-    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode): FieldDefinitionNode {
+    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
@@ -207,7 +225,8 @@ export class RelationalDBSchemaTransformer {
                 value: name
             },
             arguments: args,
-            type: type
+            type: type,
+            directives: directives
         }
     }
 
@@ -230,6 +249,43 @@ export class RelationalDBSchemaTransformer {
                 value: typeName
             },
             fields: fields
+        }
+    }
+
+    private getNameNode(name: string): NameNode {
+        return {
+            kind: Kind.NAME,
+            value: name
+        }        
+    }
+
+    private getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
+        return {
+            kind: Kind.LIST,
+            values: values
+        }
+    }
+
+    private getStringValueNode(value: string): StringValueNode {
+        return {
+            kind: Kind.STRING,
+            value: value
+        }
+    }    
+
+    private getDirectiveNode(mutationName: string): DirectiveNode {
+        return {
+            kind: Kind.DIRECTIVE,
+            name: this.getNameNode('aws_subscribe'),
+            arguments: [this.getArgumentNode(mutationName)]
+        }
+    }
+
+    private getArgumentNode(argument: string): ArgumentNode {
+        return {
+            kind: Kind.ARGUMENT,
+            name: this.getNameNode('mutations'),
+            value: this.getListValueNode([this.getStringValueNode(argument)])
         }
     }
 
