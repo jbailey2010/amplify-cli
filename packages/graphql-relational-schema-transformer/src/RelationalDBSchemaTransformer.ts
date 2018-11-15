@@ -3,6 +3,9 @@ import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, 
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
     OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
 
+import  ApiKey from 'cloudform-types/types/appSync/apiKey'    
+import { ResourceConstants, ModelResourceIDs } from 'graphql-transformer-common'
+
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
     updateTypeDefinition: ObjectTypeDefinitionNode
@@ -32,9 +35,6 @@ export class RelationalDBSchemaTransformer {
 
         // Get all of the tables within the provided db
         const tableNames = await this.listTables(databaseName, connection)
-        if (tableNames.length == 0) {
-            return `No tables present in ${databaseName}`
-        }
 
         const typeContexts = new Array()
         const types = new Array()
