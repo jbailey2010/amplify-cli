@@ -1,7 +1,12 @@
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import { print, Kind, ObjectTypeDefinitionNode,
-     NonNullTypeNode, OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode,
-      OperationTypeDefinitionNode, SchemaDefinitionNode } from 'graphql'
+import Template from 'cloudform/types/template'
+import Role, { Policy } from 'cloudform/types/iam/role'
+import Resource from 'cloudform/types/resource'
+import DataSource from 'cloudform/types/appSync/dataSource'
+import Resolver from 'cloudform/types/appSync/resolver'
+import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
+    OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
+    OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
 
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
@@ -22,6 +27,81 @@ class TableContext {
 export class RelationalDBSchemaTransformer {
     intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
     floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
+
+    public initTemaplate(): Template {
+        return {
+            AWSTemplateFormatVersion: "2010-09-09",
+            Parameters: {},
+            Resources: {
+                "RelationalDatabaseAccessRole": this.getIAMDataSourceRole(),
+                "RelationalDatabaseDataSource": this.getRelationalDataSource()
+            },
+            Outputs: {}
+        }
+    }
+
+    public getIAMDataSourceRole(): Role {
+        return new Role({
+            AssumeRolePolicyDocument: {
+                Version: '2012-10-17',
+                Statement: {
+                    Effect: 'Allow',
+                    Principal: {
+                        Service: 'appsync.amazonaws.com'
+                    },
+                    Action: {
+                        'sts': 'AssumeRole'
+                    }
+                }
+            },
+            Policies: [new Policy ({
+                PolicyName: 'RelationalDatabaseAccessPolicy',
+                PolicyDocument: {
+                    Version: '2012-10-17',
+                    Statement: {
+                        Effect: 'Allow',
+                        Action: {
+                            'rds': '*',
+                            'rds-data': '*',
+                            'secretsmanager': '*'
+                        },
+                        Resource: '*'
+                    }
+                }
+            })]
+        })
+    }
+
+    public createRelationalResolverResource(apiId: string, dataSourceName: string,
+         typeName: string, fieldName: string): Resolver {
+        return new Resolver({
+            TypeName: typeName,
+            DataSourceName: dataSourceName,
+            ApiId: apiId,
+            FieldName: fieldName
+        })
+    }
+
+    public getRelationalDataSource(): DataSource {
+        return new DataSource({
+            Type: 'RELATIONAL_DATABASE',
+            Name: 'AppSyncRelationalTransform-DataSource',
+            Description: 'RDS Resource Provisioned for AppSync via RelationalDBSchemaTransformer',
+            ApiId: 'SomeId',
+            ServiceRoleArn: 'SomeRoleArn',
+            // TODO: Uncomment once these changes are live in latest
+            // RelationalDatabaseDataSourceConfig: {
+            //     RelationalDatabaseDataSourceType: 'RDS_HTTP_ENDPOINT',
+            //     RdsHttpEndpointConfig: {
+            //         AwsRegion: '',
+            //         DbClusterIdentifier: '',
+            //         DatabaseName: '',
+            //         Schema: '',
+            //         AwsSecretStoreArn: ''
+            //     }
+            // }
+        })
+    }
 
     public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<string> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
@@ -60,10 +140,16 @@ export class RelationalDBSchemaTransformer {
         // Generate the mutations and queries based on the table structures
         types.push(this.getMutations(typeContexts))
         types.push(this.getQueries(typeContexts))
+        types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
 
         const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
-        console.log(schemaDoc)
+        // console.log(schemaDoc)
+
+        const result = this.initTemaplate()
+        const resolver = this.createRelationalResolverResource('someApi', 'someDS', 'someType', 'someField')
+        result.Resources = {...result.Resources, "CreateResolver": resolver}
+        console.log(result.Resources)
         return schemaDoc
     }
 
@@ -72,7 +158,8 @@ export class RelationalDBSchemaTransformer {
             kind: Kind.SCHEMA_DEFINITION,
             operationTypes: [
                 this.getOperationTypeDefinition('query', this.getNamedType('Query')),
-                this.getOperationTypeDefinition('mutation', this.getNamedType('Mutation'))
+                this.getOperationTypeDefinition('mutation', this.getNamedType('Mutation')),
+                this.getOperationTypeDefinition('subscription', this.getNamedType('Subscription'))
             ]
         }
     }
@@ -85,22 +172,35 @@ export class RelationalDBSchemaTransformer {
                 this.getOperationFieldDefinition(`delete${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
                         typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
             fields.push(
                 this.getOperationFieldDefinition(`create${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Create${type.name.value}Input`)),
                         `create${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
             fields.push(
                 this.getOperationFieldDefinition(`update${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Update${type.name.value}Input`)),
                         `update${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
             )
         }
         return this.getTypeDefinition(fields, 'Mutation')
+    }
+
+    private getSubscriptions(types: TableContext[]): ObjectTypeDefinitionNode {
+        const fields = []
+        for (const typeContext of types) {
+            const type = typeContext.tableTypeDefinition
+            fields.push(
+                this.getOperationFieldDefinition(`onCreate${type.name.value}`, [],
+                    this.getNamedType(`${type.name.value}`),
+                    [this.getDirectiveNode(`create${type.name.value}`)])
+            )
+        }
+        return this.getTypeDefinition(fields, 'Subscription')
     }
 
     private getQueries(types: TableContext[]): ObjectTypeDefinitionNode {
@@ -111,12 +211,12 @@ export class RelationalDBSchemaTransformer {
                 this.getOperationFieldDefinition(`get${type.name.value}`,
                     [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
                             typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`))
+                    this.getNamedType(`${type.name.value}`), null)
                 )
             fields.push(
                 this.getOperationFieldDefinition(`list${type.name.value}s`,
                     [this.getInputValueDefinition(this.getNamedType('String'), 'nextToken')],
-                    this.getNamedType(`${type.name.value}Connection`))
+                    this.getNamedType(`${type.name.value}Connection`), null)
                 )
             }
         return this.getTypeDefinition(fields, 'Query')
@@ -189,7 +289,7 @@ export class RelationalDBSchemaTransformer {
             }
         }
 
-        return new TableContext(this.getTypeDefinition(fields, tableName), this.getTypeDefinition(createFields, `Create${tableName}Input`), 
+        return new TableContext(this.getTypeDefinition(fields, tableName), this.getTypeDefinition(createFields, `Create${tableName}Input`),
                 this.getTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
     }
 
@@ -229,7 +329,7 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
-    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode): FieldDefinitionNode {
+    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
@@ -237,7 +337,8 @@ export class RelationalDBSchemaTransformer {
                 value: name
             },
             arguments: args,
-            type: type
+            type: type,
+            directives: directives
         }
     }
 
@@ -260,6 +361,43 @@ export class RelationalDBSchemaTransformer {
                 value: typeName
             },
             fields: fields
+        }
+    }
+
+    private getNameNode(name: string): NameNode {
+        return {
+            kind: Kind.NAME,
+            value: name
+        }        
+    }
+
+    private getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
+        return {
+            kind: Kind.LIST,
+            values: values
+        }
+    }
+
+    private getStringValueNode(value: string): StringValueNode {
+        return {
+            kind: Kind.STRING,
+            value: value
+        }
+    }    
+
+    private getDirectiveNode(mutationName: string): DirectiveNode {
+        return {
+            kind: Kind.DIRECTIVE,
+            name: this.getNameNode('aws_subscribe'),
+            arguments: [this.getArgumentNode(mutationName)]
+        }
+    }
+
+    private getArgumentNode(argument: string): ArgumentNode {
+        return {
+            kind: Kind.ARGUMENT,
+            name: this.getNameNode('mutations'),
+            value: this.getListValueNode([this.getStringValueNode(argument)])
         }
     }
 
