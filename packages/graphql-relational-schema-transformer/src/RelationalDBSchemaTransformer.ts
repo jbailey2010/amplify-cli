@@ -1,12 +1,10 @@
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import Template from 'cloudform/types/template'
-import Role, { Policy } from 'cloudform/types/iam/role'
-import Resource from 'cloudform/types/resource'
-import DataSource from 'cloudform/types/appSync/dataSource'
-import Resolver from 'cloudform/types/appSync/resolver'
 import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
     OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
+import RelationalDBTemplateGenerator from './RelationalDBTemplateGenerator'
+import { DocumentNode } from 'graphql'
+
 
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
@@ -28,82 +26,7 @@ export class RelationalDBSchemaTransformer {
     intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
     floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
 
-    public initTemaplate(): Template {
-        return {
-            AWSTemplateFormatVersion: "2010-09-09",
-            Parameters: {},
-            Resources: {
-                "RelationalDatabaseAccessRole": this.getIAMDataSourceRole(),
-                "RelationalDatabaseDataSource": this.getRelationalDataSource()
-            },
-            Outputs: {}
-        }
-    }
-
-    public getIAMDataSourceRole(): Role {
-        return new Role({
-            AssumeRolePolicyDocument: {
-                Version: '2012-10-17',
-                Statement: {
-                    Effect: 'Allow',
-                    Principal: {
-                        Service: 'appsync.amazonaws.com'
-                    },
-                    Action: {
-                        'sts': 'AssumeRole'
-                    }
-                }
-            },
-            Policies: [new Policy ({
-                PolicyName: 'RelationalDatabaseAccessPolicy',
-                PolicyDocument: {
-                    Version: '2012-10-17',
-                    Statement: {
-                        Effect: 'Allow',
-                        Action: {
-                            'rds': '*',
-                            'rds-data': '*',
-                            'secretsmanager': '*'
-                        },
-                        Resource: '*'
-                    }
-                }
-            })]
-        })
-    }
-
-    public createRelationalResolverResource(apiId: string, dataSourceName: string,
-         typeName: string, fieldName: string): Resolver {
-        return new Resolver({
-            TypeName: typeName,
-            DataSourceName: dataSourceName,
-            ApiId: apiId,
-            FieldName: fieldName
-        })
-    }
-
-    public getRelationalDataSource(): DataSource {
-        return new DataSource({
-            Type: 'RELATIONAL_DATABASE',
-            Name: 'AppSyncRelationalTransform-DataSource',
-            Description: 'RDS Resource Provisioned for AppSync via RelationalDBSchemaTransformer',
-            ApiId: 'SomeId',
-            ServiceRoleArn: 'SomeRoleArn',
-            // TODO: Uncomment once these changes are live in latest
-            // RelationalDatabaseDataSourceConfig: {
-            //     RelationalDatabaseDataSourceType: 'RDS_HTTP_ENDPOINT',
-            //     RdsHttpEndpointConfig: {
-            //         AwsRegion: '',
-            //         DbClusterIdentifier: '',
-            //         DatabaseName: '',
-            //         Schema: '',
-            //         AwsSecretStoreArn: ''
-            //     }
-            // }
-        })
-    }
-
-    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<string> => {
+    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<DocumentNode> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
 
         this.deleteMe(databaseName, connection)
@@ -115,9 +38,6 @@ export class RelationalDBSchemaTransformer {
 
         // Get all of the tables within the provided db
         const tableNames = await this.listTables(databaseName, connection)
-        if (tableNames.length == 0) {
-            return `No tables present in ${databaseName}`
-        }
 
         const typeContexts = new Array()
         const types = new Array()
@@ -144,13 +64,9 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getSchemaType())
 
         const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
-        // console.log(schemaDoc)
 
-        const result = this.initTemaplate()
-        const resolver = this.createRelationalResolverResource('someApi', 'someDS', 'someType', 'someField')
-        result.Resources = {...result.Resources, "CreateResolver": resolver}
-        console.log(result.Resources)
-        return schemaDoc
+        //console.log(schemaDoc)
+        return {kind: Kind.DOCUMENT, definitions: types}
     }
 
     private getSchemaType(): SchemaDefinitionNode {
@@ -453,9 +369,15 @@ export class RelationalDBSchemaTransformer {
             return `Float`
         }
         return `String`
-
     }
 }
 
 let testClass = new RelationalDBSchemaTransformer()
-testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
+let result = testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
+
+result.then(function(data: DocumentNode) {
+    console.log(print(data))
+
+    let templateClass = new RelationalDBTemplateGenerator(data)
+    console.log(templateClass.createTemplate())
+})
