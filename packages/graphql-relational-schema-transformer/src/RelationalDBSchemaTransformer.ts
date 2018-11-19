@@ -3,12 +3,15 @@ import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, 
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
     OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
 
-import  ApiKey from 'cloudform-types/types/appSync/apiKey'    
-import { ResourceConstants, ModelResourceIDs } from 'graphql-transformer-common'
-
+/**
+ * This class is used to transition all of the columns and key metadata from a table for use
+ * in generating appropriate GraphQL schema structures. It will track type definitions for 
+ * the base table, update mutation inputs, create mutation inputs, and primary key metadata.
+ */
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
     updateTypeDefinition: ObjectTypeDefinitionNode
+    // Table primary key metadata, to help properly key queries and mutations.
     tableKeyField: string
     tableKeyFieldType: string
     constructor(typeDefinition: ObjectTypeDefinitionNode, updateDefinition: ObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
@@ -64,6 +67,11 @@ export class RelationalDBSchemaTransformer {
         return schemaDoc
     }
 
+    /**
+     * Creates a schema type definition node, including operations for each of query, mutation, and subscriptions.
+     * 
+     * @returns a basic schema definition node.
+     */
     private getSchemaType(): SchemaDefinitionNode {
         return {
             kind: Kind.SCHEMA_DEFINITION,
@@ -75,6 +83,13 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Generates the basic mutation operations, given the provided table contexts. This will
+     * create a create, delete, and update operation for each table.
+     * 
+     * @param types the table contexts from which the mutations are to be generated.
+     * @returns the type definition for mutations, including a create, delete, and update for each table.
+     */
     private getMutations(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
@@ -101,6 +116,13 @@ export class RelationalDBSchemaTransformer {
         return this.getTypeDefinition(fields, 'Mutation')
     }
 
+    /**
+     * Generates the basic subscription operations, given the provided table contexts. This will
+     * create an onCreate subscription for each table.
+     * 
+     * @param types the table contexts from which the subscriptions are to be generated.
+     * @returns the type definition for subscriptions, including an onCreate for each table.
+     */
     private getSubscriptions(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
@@ -114,6 +136,13 @@ export class RelationalDBSchemaTransformer {
         return this.getTypeDefinition(fields, 'Subscription')
     }
 
+    /**
+     * Generates the basic query operations, given the provided table contexts. This will
+     * create a get and list operation for each table.
+     * 
+     * @param types the table contexts from which the queries are to be generated.
+     * @returns the type definition for queries, including a get and list for each table.
+     */
     private getQueries(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
@@ -133,15 +162,42 @@ export class RelationalDBSchemaTransformer {
         return this.getTypeDefinition(fields, 'Query')
     }
 
+    /**
+     * Sets the connection to use the provided database name during future interactions.
+     * 
+     * @param databaseName the name of the database to use.
+     * @param connection the connection to use to talk to the database.
+     */
     private setDatabase = async (databaseName: string, connection: Connection): Promise<void> => {
         await this.executeSQL(`USE ${databaseName}`, connection)
     }
 
+    /**
+     * Gets a list of all the table names in the provided database.
+     * 
+     * @param databaseName the name of the database to get tables from.
+     * @param connection the connection to use to talk to the database.
+     * @returns a list of tablenames inside the database.
+     */
     private listTables = async (databaseName: string, connection: Connection): Promise<string[]> => {
         const results = await this.executeSQL(`SHOW TABLES`, connection)
         return results.map(result => result[`Tables_in_${databaseName}`])
     }
 
+    /**
+     * For the provided table, this will create a table context. That context holds definitions for
+     * the base table type, the create input type, and the update input type (e.g. Post, CreatePostInput, and UpdatePostInput, respectively),
+     * as well as the table primary key structure for proper operation definition.
+     * 
+     * Create inputs will only differ from the base table type in that any nested types will not be present. Update table
+     * inputs will differ in that the only required field will be the primary key/identifier, as all fields don't have to
+     * be updated. Instead, it assumes the proper ones were provided on create.
+     * 
+     * @param tableName the name of the table to be translated into a GraphQL type.
+     * @param dbName the name of the database to be referenced for tables/nested types.
+     * @param connection the SQL connection to be used to interact with the db.
+     * @returns a promise of a table context structure.
+     */
     private describeTable = async (tableName: string, dbName: string, connection: Connection): Promise<TableContext> => {
         const columnDescriptions = await this.executeSQL(`DESCRIBE ${tableName}`, connection)
         // Fields in the general type (e.g. Post). Both the identifying field and any others the db dictates will be required.
@@ -181,6 +237,12 @@ export class RelationalDBSchemaTransformer {
                 this.getTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
     }
 
+    /**
+     * Creates an operation type definition (subscription, query, mutation) for the schema.
+     * 
+     * @param operationType the type node defining the operation type.
+     * @param operation  the named type node defining the operation type.
+     */
     private getOperationTypeDefinition(operationType: OperationTypeNode, operation: NamedTypeNode): OperationTypeDefinitionNode {
         return {
             kind: Kind.OPERATION_TYPE_DEFINITION,
@@ -189,6 +251,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a non-null type, which is a node wrapped around another type that simply defines it is non-nullable.
+     * 
+     * @param typeNode the type to be marked as non-nullable.
+     * @returns a non-null wrapper around the provided type.
+     */
     private getNonNullType(typeNode: NamedTypeNode): NonNullTypeNode {
         return {
             kind: Kind.NON_NULL_TYPE,
@@ -196,6 +264,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a named type for the schema.
+     * 
+     * @param name the name of the type.
+     * @returns a named type with the provided name.
+     */
     private getNamedType(name: string): NamedTypeNode {
         return {
             kind: Kind.NAMED_TYPE,
@@ -206,6 +280,13 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates an input value definition for the schema.
+     * 
+     * @param typeNode the type of the input node.
+     * @param name the name of the input.
+     * @returns an input value definition node with the provided type and name.
+     */
     private getInputValueDefinition(typeNode: NamedTypeNode | NonNullTypeNode, name: string): InputValueDefinitionNode {
         return {
             kind: Kind.INPUT_VALUE_DEFINITION,
@@ -217,6 +298,15 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates an operation field definition for the schema.
+     * 
+     * @param name the name of the operation.
+     * @param args the arguments for the operation.
+     * @param type the type of the operation.
+     * @param directives the directives (if any) applied to this field. In this context, only subscriptions will have this.
+     * @returns an operation field definition with the provided name, args, type, and optionally directives.
+     */
     private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
@@ -230,6 +320,13 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a field definition node for the schema.
+     * 
+     * @param fieldName the name of the field to be created.
+     * @param type the type of the field to be created.
+     * @returns a field definition node with the provided name and type.
+     */
     private getFieldDefinition(fieldName: string, type: NonNullTypeNode | NamedTypeNode): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
@@ -241,6 +338,13 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a type definition node for the schema.
+     * 
+     * @param fields the field set to be included in the type.
+     * @param typeName the name of the type.
+     * @returns a type definition node defined by the provided fields and name.
+     */
     private getTypeDefinition(fields: ReadonlyArray<FieldDefinitionNode>, typeName: string): ObjectTypeDefinitionNode {
         return {
             kind: Kind.OBJECT_TYPE_DEFINITION,
@@ -252,6 +356,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a name node for the schema.
+     * 
+     * @param name the name of the name node.
+     * @returns the name node defined by the provided name.
+     */
     private getNameNode(name: string): NameNode {
         return {
             kind: Kind.NAME,
@@ -259,6 +369,12 @@ export class RelationalDBSchemaTransformer {
         }        
     }
 
+    /**
+     * Creates a list value node for the schema.
+     * 
+     * @param values the list of values to be in the list node.
+     * @returns a list value node containing the provided values.
+     */
     private getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
         return {
             kind: Kind.LIST,
@@ -266,6 +382,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a simple string value node for the schema.
+     * 
+     * @param value the value to be set in the string value node.
+     * @returns a fleshed-out string value node.
+     */
     private getStringValueNode(value: string): StringValueNode {
         return {
             kind: Kind.STRING,
@@ -273,6 +395,12 @@ export class RelationalDBSchemaTransformer {
         }
     }    
 
+    /**
+     * Creates a directive node for a subscription in the schema.
+     * 
+     * @param mutationName the name of the mutation the subscription directive is for.
+     * @returns a directive node defining the subscription.
+     */
     private getDirectiveNode(mutationName: string): DirectiveNode {
         return {
             kind: Kind.DIRECTIVE,
@@ -281,6 +409,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates an argument node for a subscription directive within the schema.
+     * 
+     * @param argument the argument string.
+     * @returns the argument node.
+     */
     private getArgumentNode(argument: string): ArgumentNode {
         return {
             kind: Kind.ARGUMENT,
@@ -289,6 +423,12 @@ export class RelationalDBSchemaTransformer {
         }
     }
 
+    /**
+     * Creates a GraphQL connection type for a given GraphQL type, corresponding to a SQL table name.
+     * 
+     * @param tableName the name of the SQL table (and GraphQL type).
+     * @returns a type definition node defining the connection type for the provided type name.
+     */
     private getConnectionType(tableName: string): ObjectTypeDefinitionNode {
         return this.getTypeDefinition(
             [
@@ -309,6 +449,11 @@ export class RelationalDBSchemaTransformer {
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
     }
     
+    /**
+     * Executes the provided SQL statement.
+     * 
+     * @returns a promise with the execution response.
+     */
     private executeSQL = async (sqlString: string, connection: Connection): Promise<any> => {
         return await new Promise<FieldInfo[]>((resolve, reject) => {
             connection.query(sqlString, (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => {
@@ -321,6 +466,13 @@ export class RelationalDBSchemaTransformer {
         })
     }
 
+    /**
+     * Given the DB type for a column, make a best effort to select the appropriate GraphQL type for
+     * the corresponding field.
+     * 
+     * @param dbType the SQL column type.
+     * @returns the GraphQL field type.
+     */
     private getGraphQLType(dbType: string): string {
         const normalizedType = dbType.toUpperCase().split("(")[0]
         if (`BOOL` == normalizedType) {
