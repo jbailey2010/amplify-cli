@@ -2,6 +2,8 @@ import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
 import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
     OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
+import RelationalDBTemplateGenerator from './RelationalDBTemplateGenerator'
+import { DocumentNode } from 'graphql'
 
 /**
  * This class is used to transition all of the columns and key metadata from a table for use
@@ -10,13 +12,16 @@ import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, 
  */
 class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
+    createTypeDefinition: ObjectTypeDefinitionNode
     updateTypeDefinition: ObjectTypeDefinitionNode
     // Table primary key metadata, to help properly key queries and mutations.
     tableKeyField: string
     tableKeyFieldType: string
-    constructor(typeDefinition: ObjectTypeDefinitionNode, updateDefinition: ObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
+    constructor(typeDefinition: ObjectTypeDefinitionNode, createDefinition: ObjectTypeDefinitionNode,
+         updateDefinition: ObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
         this.tableTypeDefinition = typeDefinition
         this.tableKeyField = primaryKeyField
+        this.createTypeDefinition = createDefinition
         this.updateTypeDefinition = updateDefinition
         this.tableKeyFieldType = primaryKeyType
     }
@@ -26,7 +31,7 @@ export class RelationalDBSchemaTransformer {
     intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
     floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
 
-    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<string> => {
+    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<DocumentNode> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
 
         this.deleteMe(databaseName, connection)
@@ -47,7 +52,8 @@ export class RelationalDBSchemaTransformer {
             // Generate the 'connection' type for each table type definition
             types.push(this.getConnectionType(tableName))
             // Generate the create operation input for each table type definition
-            types.push(this.getTypeDefinition(type.tableTypeDefinition.fields, `Create${tableName}Input`))
+            // types.push(this.getTypeDefinition(type.tableTypeDefinition.fields, `Create${tableName}Input`))
+            types.push(type.createTypeDefinition)
             // Generate the default shape for the table's structure
             types.push(type.tableTypeDefinition)
             // Generate the update operation input for each table type definition
@@ -63,8 +69,9 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getSchemaType())
 
         const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
-        console.log(schemaDoc)
-        return schemaDoc
+
+        //console.log(schemaDoc)
+        return {kind: Kind.DOCUMENT, definitions: types}
     }
 
     /**
@@ -184,6 +191,15 @@ export class RelationalDBSchemaTransformer {
         return results.map(result => result[`Tables_in_${databaseName}`])
     }
 
+    private getTableForReferencedTable = async (databaseName: string,
+         tableName: string, connection: Connection) : Promise<string[]> => {
+        const results = await this.executeSQL
+            (`SELECT TABLE_NAME FROM information_schema.key_column_usage
+            WHERE referenced_table_name is not null
+            AND REFERENCED_TABLE_NAME = '${tableName}';`, connection)
+        return results.map(result => result[`TABLE_NAME`])
+    }
+
     /**
      * For the provided table, this will create a table context. That context holds definitions for
      * the base table type, the create input type, and the update input type (e.g. Post, CreatePostInput, and UpdatePostInput, respectively),
@@ -201,11 +217,14 @@ export class RelationalDBSchemaTransformer {
     private describeTable = async (tableName: string, dbName: string, connection: Connection): Promise<TableContext> => {
         const columnDescriptions = await this.executeSQL(`DESCRIBE ${tableName}`, connection)
         // Fields in the general type (e.g. Post). Both the identifying field and any others the db dictates will be required.
-        const fields = new Array() 
+        const fields = new Array()
         // Fields in the update input type (e.g. UpdatePostInput). Only the identifying field will be required, any others will be optional.
-        const updateFields = new Array() 
+        const updateFields = new Array()
+        // Field in the create input type (e.g. CreatePostInput).
+        const createFields = new Array()
+
         // The primary key, used to help generate queries and mutations
-        let primaryKey = "" 
+        let primaryKey = ""
         let primaryKeyType = ""
 
         for (const columnDescription of columnDescriptions) {
@@ -227,13 +246,24 @@ export class RelationalDBSchemaTransformer {
             const type = (!isPrimaryKey && isNullable) ? baseType : this.getNonNullType(baseType)
             fields.push(this.getFieldDefinition(columnDescription.Field, type))
 
+            createFields.push(this.getFieldDefinition(columnDescription.Field, type))
+
             // Update<type>Input has only the primary key as required, ignoring all other that the database requests as non-nullable
             const updateType = !isPrimaryKey ? baseType : this.getNonNullType(baseType)
             updateFields.push(this.getFieldDefinition(columnDescription.Field, updateType))
+            // TODO: foreign key backwards to get nested types?`
+        }
 
-            // TODO: foreign key backwards to get nested types?
-        }        
-        return new TableContext(this.getTypeDefinition(fields, tableName), 
+        // Add foreign key for this table
+        let tablesWithRef = await this.getTableForReferencedTable(dbName, tableName, connection)
+        for (const tableWithRef of tablesWithRef) {
+            if (tableWithRef && tableWithRef.length > 0) {
+                const baseType = this.getNamedType(`${tableWithRef}Connection`)
+                fields.push(this.getFieldDefinition(`${tableWithRef}`, baseType))
+            }
+        }
+
+        return new TableContext(this.getTypeDefinition(fields, tableName), this.getTypeDefinition(createFields, `Create${tableName}Input`),
                 this.getTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
     }
 
@@ -311,7 +341,7 @@ export class RelationalDBSchemaTransformer {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
-                kind:Kind.NAME,
+                kind: Kind.NAME,
                 value: name
             },
             arguments: args,
@@ -331,7 +361,7 @@ export class RelationalDBSchemaTransformer {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
-                kind:Kind.NAME,
+                kind: Kind.NAME,
                 value: fieldName
             },
             type
@@ -434,7 +464,7 @@ export class RelationalDBSchemaTransformer {
             [
                 this.getFieldDefinition('items', this.getNamedType(`[${tableName}]`)),
                 this.getFieldDefinition('nextToken', this.getNamedType('String'))
-            ], 
+            ],
             `${tableName}Connection`)
     }
 
@@ -444,7 +474,7 @@ export class RelationalDBSchemaTransformer {
 
     private deleteMeTables = async (connection: Connection): Promise<void> => {
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id)`, connection)
+        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test1 (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
     }
@@ -493,9 +523,15 @@ export class RelationalDBSchemaTransformer {
             return `Float`
         }
         return `String`
-
     }
 }
 
 let testClass = new RelationalDBSchemaTransformer()
-testClass.getSchemaWithCredentials("root", "password", "localhost", "testdb")
+let result = testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
+
+result.then(function(data: DocumentNode) {
+    console.log(print(data))
+
+    let templateClass = new RelationalDBTemplateGenerator(data)
+    console.log(templateClass.createTemplate())
+})
