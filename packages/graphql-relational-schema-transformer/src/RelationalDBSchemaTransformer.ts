@@ -34,11 +34,13 @@ export class RelationalDBSchemaTransformer {
     public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<DocumentNode> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
 
+        // TODO: Test code, delete this
         this.deleteMe(databaseName, connection)
 
         // Set the working db to be what the user provides
         this.setDatabase(databaseName, connection)
 
+        // TODO: Test code, delete this
         this.deleteMeTables(connection)
 
         // Get all of the tables within the provided db
@@ -67,8 +69,6 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getQueries(typeContexts))
         types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
-
-        const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
 
         //console.log(schemaDoc)
         return {kind: Kind.DOCUMENT, definitions: types}
@@ -232,9 +232,7 @@ export class RelationalDBSchemaTransformer {
             if (columnDescription.Key == 'PRI') {
                 primaryKey = columnDescription.Field
                 primaryKeyType = this.getGraphQLType(columnDescription.Type)
-            } else if (columnDescription.Key == 'MUL') {
-                // TODO: foreign key!
-            }
+            } 
 
             // Create the basic field type shape, to be consumed by every field definition
             const baseType = this.getNamedType(this.getGraphQLType(columnDescription.Type))
@@ -251,7 +249,6 @@ export class RelationalDBSchemaTransformer {
             // Update<type>Input has only the primary key as required, ignoring all other that the database requests as non-nullable
             const updateType = !isPrimaryKey ? baseType : this.getNonNullType(baseType)
             updateFields.push(this.getFieldDefinition(columnDescription.Field, updateType))
-            // TODO: foreign key backwards to get nested types?`
         }
 
         // Add foreign key for this table
@@ -468,10 +465,12 @@ export class RelationalDBSchemaTransformer {
             `${tableName}Connection`)
     }
 
+    // TODO: Test code, delete this
     private deleteMe = async (databaseName: string, connection: Connection): Promise<void> => {
         await this.executeSQL(`CREATE DATABASE IF NOT EXISTS ${databaseName}`, connection)
     }
 
+    // TODO: Test code, delete this
     private deleteMeTables = async (connection: Connection): Promise<void> => {
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
         await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
@@ -526,8 +525,9 @@ export class RelationalDBSchemaTransformer {
     }
 }
 
+// TODO: Test code, delete this
 let testClass = new RelationalDBSchemaTransformer()
-let result = testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
+let result = testClass.getSchemaWithCredentials("root", "password", "localhost", "testdb")
 
 result.then(function(data: DocumentNode) {
     console.log(print(data))
