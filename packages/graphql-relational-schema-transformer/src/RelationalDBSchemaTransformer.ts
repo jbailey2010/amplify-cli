@@ -502,7 +502,7 @@ export class RelationalDBSchemaTransformer {
      * @param dbType the SQL column type.
      * @returns the GraphQL field type.
      */
-    private getGraphQLType(dbType: string): string {
+    getGraphQLType(dbType: string): string {
         const normalizedType = dbType.toUpperCase().split("(")[0]
         if (`BOOL` == normalizedType) {
             return `Boolean`
