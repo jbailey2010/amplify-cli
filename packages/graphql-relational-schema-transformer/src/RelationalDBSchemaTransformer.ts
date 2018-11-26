@@ -1,8 +1,7 @@
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
+import { Kind, print, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
     OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
-import RelationalDBTemplateGenerator from './RelationalDBTemplateGenerator'
 import { DocumentNode } from 'graphql'
 
 /**
@@ -31,17 +30,12 @@ export class RelationalDBSchemaTransformer {
     intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
     floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
 
-    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<DocumentNode> => {
+    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, 
+        databaseName: string): Promise<DocumentNode> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
-
-        // TODO: Test code, delete this
-        this.deleteMe(databaseName, connection)
 
         // Set the working db to be what the user provides
         this.setDatabase(databaseName, connection)
-
-        // TODO: Test code, delete this
-        this.deleteMeTables(connection)
 
         // Get all of the tables within the provided db
         const tableNames = await this.listTables(databaseName, connection)
@@ -70,7 +64,6 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
 
-        //console.log(schemaDoc)
         return {kind: Kind.DOCUMENT, definitions: types}
     }
 
@@ -79,7 +72,7 @@ export class RelationalDBSchemaTransformer {
      * 
      * @returns a basic schema definition node.
      */
-    private getSchemaType(): SchemaDefinitionNode {
+    getSchemaType(): SchemaDefinitionNode {
         return {
             kind: Kind.SCHEMA_DEFINITION,
             operationTypes: [
@@ -175,7 +168,7 @@ export class RelationalDBSchemaTransformer {
      * @param databaseName the name of the database to use.
      * @param connection the connection to use to talk to the database.
      */
-    private setDatabase = async (databaseName: string, connection: Connection): Promise<void> => {
+    setDatabase = async (databaseName: string, connection: Connection): Promise<void> => {
         await this.executeSQL(`USE ${databaseName}`, connection)
     }
 
@@ -186,13 +179,21 @@ export class RelationalDBSchemaTransformer {
      * @param connection the connection to use to talk to the database.
      * @returns a list of tablenames inside the database.
      */
-    private listTables = async (databaseName: string, connection: Connection): Promise<string[]> => {
+    listTables = async (databaseName: string, connection: Connection): Promise<string[]> => {
         const results = await this.executeSQL(`SHOW TABLES`, connection)
         return results.map(result => result[`Tables_in_${databaseName}`])
     }
 
-    private getTableForReferencedTable = async (databaseName: string,
-         tableName: string, connection: Connection) : Promise<string[]> => {
+    /**
+     * Looks up any foreign key constraints that might exist for the provided table.
+     * This is done to ensure our generated schema includes nested types, where possible.
+     * 
+     * @param tableName the name of the table to be checked for foreign key constraints.
+     * @param connection the connection to be used in talking to the database.
+     * @returns a list of table names that are applicable as having constraints.
+     */
+    getTableForReferencedTable = async (tableName: string, 
+        connection: Connection) : Promise<string[]> => {
         const results = await this.executeSQL
             (`SELECT TABLE_NAME FROM information_schema.key_column_usage
             WHERE referenced_table_name is not null
@@ -252,7 +253,7 @@ export class RelationalDBSchemaTransformer {
         }
 
         // Add foreign key for this table
-        let tablesWithRef = await this.getTableForReferencedTable(dbName, tableName, connection)
+        let tablesWithRef = await this.getTableForReferencedTable(tableName, connection)
         for (const tableWithRef of tablesWithRef) {
             if (tableWithRef && tableWithRef.length > 0) {
                 const baseType = this.getNamedType(`${tableWithRef}Connection`)
@@ -270,7 +271,7 @@ export class RelationalDBSchemaTransformer {
      * @param operationType the type node defining the operation type.
      * @param operation  the named type node defining the operation type.
      */
-    private getOperationTypeDefinition(operationType: OperationTypeNode, operation: NamedTypeNode): OperationTypeDefinitionNode {
+    getOperationTypeDefinition(operationType: OperationTypeNode, operation: NamedTypeNode): OperationTypeDefinitionNode {
         return {
             kind: Kind.OPERATION_TYPE_DEFINITION,
             operation: operationType,
@@ -284,7 +285,7 @@ export class RelationalDBSchemaTransformer {
      * @param typeNode the type to be marked as non-nullable.
      * @returns a non-null wrapper around the provided type.
      */
-    private getNonNullType(typeNode: NamedTypeNode): NonNullTypeNode {
+    getNonNullType(typeNode: NamedTypeNode): NonNullTypeNode {
         return {
             kind: Kind.NON_NULL_TYPE,
             type: typeNode
@@ -297,7 +298,7 @@ export class RelationalDBSchemaTransformer {
      * @param name the name of the type.
      * @returns a named type with the provided name.
      */
-    private getNamedType(name: string): NamedTypeNode {
+    getNamedType(name: string): NamedTypeNode {
         return {
             kind: Kind.NAMED_TYPE,
             name: {
@@ -314,7 +315,7 @@ export class RelationalDBSchemaTransformer {
      * @param name the name of the input.
      * @returns an input value definition node with the provided type and name.
      */
-    private getInputValueDefinition(typeNode: NamedTypeNode | NonNullTypeNode, name: string): InputValueDefinitionNode {
+    getInputValueDefinition(typeNode: NamedTypeNode | NonNullTypeNode, name: string): InputValueDefinitionNode {
         return {
             kind: Kind.INPUT_VALUE_DEFINITION,
             name: {
@@ -334,7 +335,7 @@ export class RelationalDBSchemaTransformer {
      * @param directives the directives (if any) applied to this field. In this context, only subscriptions will have this.
      * @returns an operation field definition with the provided name, args, type, and optionally directives.
      */
-    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
+    getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
@@ -354,7 +355,7 @@ export class RelationalDBSchemaTransformer {
      * @param type the type of the field to be created.
      * @returns a field definition node with the provided name and type.
      */
-    private getFieldDefinition(fieldName: string, type: NonNullTypeNode | NamedTypeNode): FieldDefinitionNode {
+    getFieldDefinition(fieldName: string, type: NonNullTypeNode | NamedTypeNode): FieldDefinitionNode {
         return {
             kind: Kind.FIELD_DEFINITION,
             name: {
@@ -372,7 +373,7 @@ export class RelationalDBSchemaTransformer {
      * @param typeName the name of the type.
      * @returns a type definition node defined by the provided fields and name.
      */
-    private getTypeDefinition(fields: ReadonlyArray<FieldDefinitionNode>, typeName: string): ObjectTypeDefinitionNode {
+    getTypeDefinition(fields: ReadonlyArray<FieldDefinitionNode>, typeName: string): ObjectTypeDefinitionNode {
         return {
             kind: Kind.OBJECT_TYPE_DEFINITION,
             name: {
@@ -389,7 +390,7 @@ export class RelationalDBSchemaTransformer {
      * @param name the name of the name node.
      * @returns the name node defined by the provided name.
      */
-    private getNameNode(name: string): NameNode {
+    getNameNode(name: string): NameNode {
         return {
             kind: Kind.NAME,
             value: name
@@ -402,7 +403,7 @@ export class RelationalDBSchemaTransformer {
      * @param values the list of values to be in the list node.
      * @returns a list value node containing the provided values.
      */
-    private getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
+    getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
         return {
             kind: Kind.LIST,
             values: values
@@ -415,7 +416,7 @@ export class RelationalDBSchemaTransformer {
      * @param value the value to be set in the string value node.
      * @returns a fleshed-out string value node.
      */
-    private getStringValueNode(value: string): StringValueNode {
+    getStringValueNode(value: string): StringValueNode {
         return {
             kind: Kind.STRING,
             value: value
@@ -428,7 +429,7 @@ export class RelationalDBSchemaTransformer {
      * @param mutationName the name of the mutation the subscription directive is for.
      * @returns a directive node defining the subscription.
      */
-    private getDirectiveNode(mutationName: string): DirectiveNode {
+    getDirectiveNode(mutationName: string): DirectiveNode {
         return {
             kind: Kind.DIRECTIVE,
             name: this.getNameNode('aws_subscribe'),
@@ -442,7 +443,7 @@ export class RelationalDBSchemaTransformer {
      * @param argument the argument string.
      * @returns the argument node.
      */
-    private getArgumentNode(argument: string): ArgumentNode {
+    getArgumentNode(argument: string): ArgumentNode {
         return {
             kind: Kind.ARGUMENT,
             name: this.getNameNode('mutations'),
@@ -456,26 +457,13 @@ export class RelationalDBSchemaTransformer {
      * @param tableName the name of the SQL table (and GraphQL type).
      * @returns a type definition node defining the connection type for the provided type name.
      */
-    private getConnectionType(tableName: string): ObjectTypeDefinitionNode {
+    getConnectionType(tableName: string): ObjectTypeDefinitionNode {
         return this.getTypeDefinition(
             [
                 this.getFieldDefinition('items', this.getNamedType(`[${tableName}]`)),
                 this.getFieldDefinition('nextToken', this.getNamedType('String'))
             ],
             `${tableName}Connection`)
-    }
-
-    // TODO: Test code, delete this
-    private deleteMe = async (databaseName: string, connection: Connection): Promise<void> => {
-        await this.executeSQL(`CREATE DATABASE IF NOT EXISTS ${databaseName}`, connection)
-    }
-
-    // TODO: Test code, delete this
-    private deleteMeTables = async (connection: Connection): Promise<void> => {
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test1 (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
     }
     
     /**
@@ -524,14 +512,8 @@ export class RelationalDBSchemaTransformer {
         return `String`
     }
 }
-
-// TODO: Test code, delete this
 let testClass = new RelationalDBSchemaTransformer()
 let result = testClass.getSchemaWithCredentials("root", "password", "localhost", "testdb")
-
-result.then(function(data: DocumentNode) {
+    .then(function(data: DocumentNode) {
     console.log(print(data))
-
-    let templateClass = new RelationalDBTemplateGenerator(data)
-    console.log(templateClass.createTemplate())
 })
