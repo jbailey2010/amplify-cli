@@ -9,7 +9,7 @@ import { DocumentNode } from 'graphql'
  * in generating appropriate GraphQL schema structures. It will track type definitions for 
  * the base table, update mutation inputs, create mutation inputs, and primary key metadata.
  */
-class TableContext {
+export class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
     createTypeDefinition: ObjectTypeDefinitionNode
     updateTypeDefinition: ObjectTypeDefinitionNode
@@ -215,7 +215,7 @@ export class RelationalDBSchemaTransformer {
      * @param connection the SQL connection to be used to interact with the db.
      * @returns a promise of a table context structure.
      */
-    private describeTable = async (tableName: string, dbName: string, connection: Connection): Promise<TableContext> => {
+    describeTable = async (tableName: string, dbName: string, connection: Connection): Promise<TableContext> => {
         const columnDescriptions = await this.executeSQL(`DESCRIBE ${tableName}`, connection)
         // Fields in the general type (e.g. Post). Both the identifying field and any others the db dictates will be required.
         const fields = new Array()
@@ -512,8 +512,3 @@ export class RelationalDBSchemaTransformer {
         return `String`
     }
 }
-let testClass = new RelationalDBSchemaTransformer()
-let result = testClass.getSchemaWithCredentials("root", "password", "localhost", "testdb")
-    .then(function(data: DocumentNode) {
-    console.log(print(data))
-})

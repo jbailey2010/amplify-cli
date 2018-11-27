@@ -1,7 +1,7 @@
 jest.mock('mysql')
 
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import { RelationalDBSchemaTransformer } from '../RelationalDBSchemaTransformer';
+import { RelationalDBSchemaTransformer, TableContext } from '../RelationalDBSchemaTransformer';
 import { Kind, DocumentNode, print } from 'graphql'
 
 const dummyTransformer = new RelationalDBSchemaTransformer()
@@ -81,20 +81,66 @@ const MockConnection = jest.fn<Connection>(() => ({
 test('Test schema generation end to end', async() => {
     const mockConnection = new MockConnection()
     createConnection.mockReturnValue(mockConnection)
-
     const schemaDoc = await dummyTransformer.getSchemaWithCredentials(testDBUser, testDBPassword,  testDBHost, testDBName)
+
+    expect(mockConnection.query).toHaveBeenCalledWith(`USE ${testDBName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`SHOW TABLES`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`DESCRIBE ${tableAName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`DESCRIBE ${tableBName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`DESCRIBE ${tableCName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`DESCRIBE ${tableDName}`, expect.any(Function))
+    expect(schemaDoc).toBeDefined()
+    expect(schemaDoc.kind).toBe(Kind.DOCUMENT)
+    // 4 tables * (base, update input, connecton, and create input) + schema, queries, mutations, and subs
+    // (4 * 4) + 4 = 20
+    expect(schemaDoc.definitions.length).toBe(20) 
+    const schemaString = print(schemaDoc)
+    expect(schemaString).toBeDefined()
+    console.log(schemaString)
 })
 
-test('Test schema type node creation', () => {
-    const schemaNode = dummyTransformer.getSchemaType()
-
-    expect(schemaNode.kind).toEqual(Kind.SCHEMA_DEFINITION)
-    expect(schemaNode.operationTypes.length).toEqual(3)
+test('Test describe table', async () => {
+    const connection = new MockConnection()
+    describeTableTestCommon(tableAName, 2, false, await dummyTransformer.describeTable(tableAName, testDBName, connection))    
+    describeTableTestCommon(tableBName, 3, true, await dummyTransformer.describeTable(tableBName, testDBName, connection))    
+    describeTableTestCommon(tableCName, 2, false, await dummyTransformer.describeTable(tableCName, testDBName, connection))    
+    describeTableTestCommon(tableDName, 2, false, await dummyTransformer.describeTable(tableDName, testDBName, connection))    
 })
+
+function describeTableTestCommon(tableName: string, fieldLength: number, isForeignKey: boolean, tableContext: TableContext) {
+    expect(tableContext.tableKeyField).toEqual('id')
+    expect(tableContext.tableKeyFieldType).toEqual('Int')
+    expect(tableContext.createTypeDefinition).toBeDefined()
+    expect(tableContext.updateTypeDefinition).toBeDefined()
+    expect(tableContext.tableTypeDefinition).toBeDefined()
+    expect(tableContext.tableTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
+    expect(tableContext.updateTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
+    expect(tableContext.createTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
+    expect(tableContext.tableTypeDefinition.name.value).toEqual(tableName)
+    expect(tableContext.tableTypeDefinition.name.kind).toEqual(Kind.NAME)
+    expect(tableContext.updateTypeDefinition.name.value).toEqual(`Update${tableName}Input`)
+    expect(tableContext.updateTypeDefinition.name.kind).toEqual(Kind.NAME)
+    expect(tableContext.createTypeDefinition.name.value).toEqual(`Create${tableName}Input`)
+    expect(tableContext.createTypeDefinition.name.kind).toEqual(Kind.NAME)
+    /**
+     * If it's a table with a foreign key constraint, the base type will have one additional element
+     * for the nested type. e.g. if type Posts had fields of id/int, content/string, and author/string
+     * but comments had a foreign key constraint on it, then it would look like this (whereas the 
+     * create and update inputs would not have the additional field):
+     * type Post {
+     *   id: Int!
+     *   author: String!
+     *   content: String!
+     *   comments: CommentConnection
+     * }
+    */ 
+    expect(tableContext.tableTypeDefinition.fields.length).toEqual(isForeignKey ? fieldLength+1 : fieldLength)
+    expect(tableContext.updateTypeDefinition.fields.length).toEqual(fieldLength)
+    expect(tableContext.createTypeDefinition.fields.length).toEqual(fieldLength)
+}
 
 test('Test list tables', async () => {
     const connection = new MockConnection()
-
     const tableNames = await dummyTransformer.listTables(testDBName, connection)
     expect(connection.query).toHaveBeenCalledWith(`SHOW TABLES`, expect.any(Function))
     expect(tableNames.length).toBe(4)
@@ -106,7 +152,6 @@ test('Test list tables', async () => {
 
 test('Test set database', () => {
     const mockConnection = new MockConnection()
-
     dummyTransformer.setDatabase(testDBName, mockConnection)
     expect(mockConnection.query).toHaveBeenCalled()
     expect(mockConnection.query).toHaveBeenCalledWith(`USE ${testDBName}`, expect.any(Function))
@@ -114,7 +159,6 @@ test('Test set database', () => {
 
 test('Test lookup foreign key', async () => {
     const mockConnection = new MockConnection()
-
     const aKeys = await dummyTransformer.getTableForReferencedTable(tableAName, mockConnection)
     const bKeys = await dummyTransformer.getTableForReferencedTable(tableBName, mockConnection)
     const cKeys = await dummyTransformer.getTableForReferencedTable(tableCName, mockConnection)
@@ -129,6 +173,12 @@ test('Test lookup foreign key', async () => {
     expect(dKeys.length).toBe(0)
     expect(bKeys[0]).toBe(tableAName)
 
+})
+
+test('Test schema type node creation', () => {
+    const schemaNode = dummyTransformer.getSchemaType()
+    expect(schemaNode.kind).toEqual(Kind.SCHEMA_DEFINITION)
+    expect(schemaNode.operationTypes.length).toEqual(3)
 })
 
 test('Test operation type node creation', () => {
