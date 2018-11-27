@@ -114,8 +114,8 @@ function describeTableTestCommon(tableName: string, fieldLength: number, isForei
     expect(tableContext.updateTypeDefinition).toBeDefined()
     expect(tableContext.tableTypeDefinition).toBeDefined()
     expect(tableContext.tableTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
-    expect(tableContext.updateTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
-    expect(tableContext.createTypeDefinition.kind).toEqual(Kind.OBJECT_TYPE_DEFINITION)
+    expect(tableContext.updateTypeDefinition.kind).toEqual(Kind.INPUT_OBJECT_TYPE_DEFINITION)
+    expect(tableContext.createTypeDefinition.kind).toEqual(Kind.INPUT_OBJECT_TYPE_DEFINITION)
     expect(tableContext.tableTypeDefinition.name.value).toEqual(tableName)
     expect(tableContext.tableTypeDefinition.name.kind).toEqual(Kind.NAME)
     expect(tableContext.updateTypeDefinition.name.value).toEqual(`Update${tableName}Input`)
@@ -261,6 +261,14 @@ test('Test list value node creation', () => {
     const listValueNode = dummyTransformer.getListValueNode(valueList)
     expect(listValueNode.kind).toEqual(Kind.LIST)
     expect(listValueNode.values).toEqual(valueList)
+})
+
+test('Test object type node creation', () => {
+    const name = 'name'
+    const inputNode = dummyTransformer.getInputTypeDefinition([], name)
+    expect(inputNode.kind).toEqual(Kind.INPUT_OBJECT_TYPE_DEFINITION)
+    expect(inputNode.fields.length).toEqual(0)
+    expect(inputNode.name.value).toEqual(name)
 })
 
 test('Test string value node creation', () => {

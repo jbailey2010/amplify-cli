@@ -1,7 +1,7 @@
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
 import { Kind, print, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
     OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
-    OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
+    OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode, InputObjectTypeDefinitionNode} from 'graphql'
 import { DocumentNode } from 'graphql'
 
 /**
@@ -11,13 +11,13 @@ import { DocumentNode } from 'graphql'
  */
 export class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
-    createTypeDefinition: ObjectTypeDefinitionNode
-    updateTypeDefinition: ObjectTypeDefinitionNode
+    createTypeDefinition: InputObjectTypeDefinitionNode
+    updateTypeDefinition: InputObjectTypeDefinitionNode
     // Table primary key metadata, to help properly key queries and mutations.
     tableKeyField: string
     tableKeyFieldType: string
-    constructor(typeDefinition: ObjectTypeDefinitionNode, createDefinition: ObjectTypeDefinitionNode,
-         updateDefinition: ObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
+    constructor(typeDefinition: ObjectTypeDefinitionNode, createDefinition: InputObjectTypeDefinitionNode,
+         updateDefinition: InputObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
         this.tableTypeDefinition = typeDefinition
         this.tableKeyField = primaryKeyField
         this.createTypeDefinition = createDefinition
@@ -245,11 +245,11 @@ export class RelationalDBSchemaTransformer {
             const type = (!isPrimaryKey && isNullable) ? baseType : this.getNonNullType(baseType)
             fields.push(this.getFieldDefinition(columnDescription.Field, type))
 
-            createFields.push(this.getFieldDefinition(columnDescription.Field, type))
+            createFields.push(this.getInputValueDefinition(type, columnDescription.Field))
 
             // Update<type>Input has only the primary key as required, ignoring all other that the database requests as non-nullable
             const updateType = !isPrimaryKey ? baseType : this.getNonNullType(baseType)
-            updateFields.push(this.getFieldDefinition(columnDescription.Field, updateType))
+            updateFields.push(this.getInputValueDefinition(updateType, columnDescription.Field))
         }
 
         // Add foreign key for this table
@@ -261,8 +261,8 @@ export class RelationalDBSchemaTransformer {
             }
         }
 
-        return new TableContext(this.getTypeDefinition(fields, tableName), this.getTypeDefinition(createFields, `Create${tableName}Input`),
-                this.getTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
+        return new TableContext(this.getTypeDefinition(fields, tableName), this.getInputTypeDefinition(createFields, `Create${tableName}Input`),
+                this.getInputTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
     }
 
     /**
@@ -376,6 +376,24 @@ export class RelationalDBSchemaTransformer {
     getTypeDefinition(fields: ReadonlyArray<FieldDefinitionNode>, typeName: string): ObjectTypeDefinitionNode {
         return {
             kind: Kind.OBJECT_TYPE_DEFINITION,
+            name: {
+                kind: Kind.NAME,
+                value: typeName
+            },
+            fields: fields
+        }
+    }
+
+    /**
+     * Creates an input type definition node for the schema.
+     * 
+     * @param fields the fields in the input type.
+     * @param typeName the name of the input type
+     * @returns an input type definition node defined by the provided fields and
+     */
+    getInputTypeDefinition(fields: ReadonlyArray<InputValueDefinitionNode>, typeName: string): InputObjectTypeDefinitionNode {
+        return {
+            kind: Kind.INPUT_OBJECT_TYPE_DEFINITION,
             name: {
                 kind: Kind.NAME,
                 value: typeName
