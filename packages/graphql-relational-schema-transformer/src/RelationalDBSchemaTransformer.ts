@@ -22,11 +22,20 @@ class TableContext {
     }
 }
 
+class SchemaContext {
+    schemaDoc: DocumentNode
+    typePrimaryKeyMap: {}
+    constructor(schemaDoc: DocumentNode, typePrimaryKeyMap: {}) {
+        this.schemaDoc = schemaDoc
+        this.typePrimaryKeyMap  = typePrimaryKeyMap
+    }
+}
+
 export class RelationalDBSchemaTransformer {
     intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
     floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
 
-    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<DocumentNode> => {
+    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<SchemaContext> => {
         const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
 
         this.deleteMe(databaseName, connection)
@@ -47,7 +56,6 @@ export class RelationalDBSchemaTransformer {
             // Generate the 'connection' type for each table type definition
             types.push(this.getConnectionType(tableName))
             // Generate the create operation input for each table type definition
-            // types.push(this.getTypeDefinition(type.tableTypeDefinition.fields, `Create${tableName}Input`))
             types.push(type.createTypeDefinition)
             // Generate the default shape for the table's structure
             types.push(type.tableTypeDefinition)
@@ -63,10 +71,9 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
 
-        const schemaDoc = print({kind: Kind.DOCUMENT, definitions: types})
-
-        //console.log(schemaDoc)
-        return {kind: Kind.DOCUMENT, definitions: types}
+        const schemaCtx = new SchemaContext({kind: Kind.DOCUMENT, definitions: types}, {})
+        //console.log(schemaCtx.schemaDoc)
+        return schemaCtx
     }
 
     private getSchemaType(): SchemaDefinitionNode {
@@ -331,10 +338,12 @@ export class RelationalDBSchemaTransformer {
     }
 
     private deleteMeTables = async (connection: Connection): Promise<void> => {
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test1 (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
+        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
+        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
+        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test1 (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
+        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100),
+        //  name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
+        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Dogs (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
     }
 
     private executeSQL = async (sqlString: string, connection: Connection): Promise<any> => {
@@ -375,9 +384,9 @@ export class RelationalDBSchemaTransformer {
 let testClass = new RelationalDBSchemaTransformer()
 let result = testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
 
-result.then(function(data: DocumentNode) {
-    console.log(print(data))
+result.then(function(data: SchemaContext) {
+    console.log(print(data.schemaDoc))
 
-    let templateClass = new RelationalDBTemplateGenerator(data)
+    let templateClass = new RelationalDBTemplateGenerator(data.schemaDoc)
     console.log(templateClass.createTemplate())
 })
