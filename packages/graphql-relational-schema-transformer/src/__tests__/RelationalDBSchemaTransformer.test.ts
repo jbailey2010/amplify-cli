@@ -180,6 +180,45 @@ test('Test list tables fails', async() => {
     expect(mockConnection.query).toHaveBeenLastCalledWith(`SHOW TABLES`, expect.any(Function))
 })
 
+test('Test describe table fails', async() => {
+    const FailConditionMockConnection = jest.fn<Connection>(() => ({
+        query: jest.fn(function (sqlString: string, queryCallback: (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => void) {
+            let results = null
+            let error = null
+            if (sqlString == `SHOW TABLES`) {
+                // For list tables, return a set of four table names
+                results = [ { Tables_in_failureDB: tableAName },
+                { Tables_in_failureDB: tableBName },
+                { Tables_in_failureDB: tableCName },
+                { Tables_in_failureDB: tableDName } ]
+            } else if (sqlString == `USE ${testDBName}`) {
+                // If it's the use db, we don't need a response
+                results = ''
+            } else if (sqlString == `DESCRIBE ${tableAName}`) {
+                error = {errno: 400, name: 'test error', message: 'no tables exist', code: 'test', fatal: true}
+            }
+
+            queryCallback(error, results, null)
+        })
+    })
+    const mockConnection = new FailConditionMockConnection()
+    createConnection.mockReturnValue(mockConnection)
+    try {
+        await dummyTransformer.processMySQLSchemaOverJDBCWithCredentials(testDBUser, testDBPassword,  testDBHost, failureTestDBName)
+        jest.fail()
+    } catch (err) {
+        if (err instanceof RelationalDBParsingException) {
+            // expected
+        } else {
+            jest.fail()
+        }
+
+    }
+    expect(mockConnection.query).toHaveBeenCalledWith(`USE ${failureTestDBName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`SHOW TABLES`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`DESCRIBE ${tableAName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenLastCalledWith(`DESCRIBE ${tableAName}`, expect.any(Function))
+})
 
 test('Test connection type shape', () => {
     const testType = 'type name'

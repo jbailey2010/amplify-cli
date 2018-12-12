@@ -42,7 +42,6 @@ export class RelationalDBSchemaTransformer {
         try {
             await this.mySQLReader.begin(databaseName)
         } catch (err) {
-            console.log('begin failed')
             throw new RelationalDBParsingException(`Failed to set database to ${databaseName}`, err.stack)
         }
 
@@ -196,8 +195,3 @@ export class RelationalDBSchemaTransformer {
             `${tableName}Connection`)
     }
 }
-
-let testClass = new RelationalDBSchemaTransformer()
-let result = testClass.processMySQLSchemaOverJDBCWithCredentials("root", "password", "localhost", "testdb").catch((err) => {
-    console.log('Caught error overall ' + err.stack)
-})

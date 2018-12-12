@@ -4,7 +4,7 @@
   "description": "An AppSync model transform that takes a relational database and turns that into a GraphQL schema document.",
   "main": "lib/index.js",
   "scripts": {
-    "test": "jest",
+    "test": "jest --coverage",
     "build": "tsc",
     "clean": "rm -rf ./lib"
   },
@@ -32,6 +32,8 @@
     "typescript": "^3.1.2"
   },
   "jest": {
+    "collectCoverage": true,
+    "coverageReporters": ["json", "html"],
     "transform": {
       "^.+\\.tsx?$": "ts-jest"
     },
