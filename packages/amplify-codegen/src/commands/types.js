@@ -1,6 +1,6 @@
 const glob = require('glob-all');
 const path = require('path');
-const { generate } = require('aws-appsync-codegen');
+const { generate } = require('amplify-graphql-types-generator');
 const Ora = require('ora');
 const jetpack = require('fs-jetpack');
 
@@ -36,7 +36,7 @@ async function generateTypes(context, forceDownloadSchema) {
       }
       const codeGenSpinner = new Ora(constants.INFO_MESSAGE_CODEGEN_GENERATE_STARTED);
       codeGenSpinner.start();
-      generate(queries, schema, output, '', target, '', '', {
+      generate(queries, schema, output, '', target, '', {
         addTypename: true,
       });
       codeGenSpinner.succeed(`${constants.INFO_MESSAGE_CODEGEN_GENERATE_SUCCESS} ${output}`);

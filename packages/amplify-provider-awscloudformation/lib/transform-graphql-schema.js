@@ -27,6 +27,11 @@ Run \`amplify update api\` and choose "Amazon Cognito User Pool" as the authoriz
 }
 
 async function transformGraphQLSchema(context, options) {
+  const flags = context.parameters.options;
+  if ('gql-override' in flags && !flags['gql-override']) {
+    return;
+  }
+
   let { resourceDir, parameters } = options;
   // const { noConfig } = options;
 
@@ -124,7 +129,7 @@ async function transformGraphQLSchema(context, options) {
     resources which would be created for you as a
      part of the AppSync service.`);
 
-    if (await context.prompt.confirm('Do you want to use your own
+    if (await context.amplify.confirmPrompt.run('Do you want to use your own
       tables instead?')) {
       let continueConfiguringDyanmoTables = true;
 

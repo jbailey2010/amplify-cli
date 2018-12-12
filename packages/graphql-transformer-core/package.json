@@ -1,10 +1,11 @@
 {
   "name": "graphql-transformer-core",
-  "version": "1.0.27",
+  "version": "1.0.33",
   "description": "A framework to transform from GraphQL SDL to AWS CloudFormation.",
   "main": "lib/index.js",
   "scripts": {
     "test": "jest",
+    "test-ci": "jest --ci -i",
     "build": "tsc",
     "clean": "rm -rf ./lib"
   },
