@@ -3,6 +3,7 @@ jest.mock('mysql')
 import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
 import { RelationalDBSchemaTransformer, TableContext } from '../RelationalDBSchemaTransformer';
 import { Kind, DocumentNode, print } from 'graphql'
+import { RelationalDBParsingException } from '../RelationalDBParsingException';
 
 
 const dummyTransformer = new RelationalDBSchemaTransformer()
@@ -11,6 +12,7 @@ const testDBUser = 'testUsername'
 const testDBPassword = 'testPassword'
 const testDBHost = 'testHost'
 const testDBName = 'testdb'
+const failureTestDBName = 'failureDB'
 const tableAName = 'a'
 const tableBName = 'b'
 const tableCName = 'c'
@@ -113,6 +115,69 @@ test('Test schema generation end to end', async() => {
     const schemaString = print(schemaDoc)
     expect(schemaString).toBeDefined()
     console.log(schemaString)
+})
+
+test('Test begin fails on database selection', async() => {
+    const FailConditionMockConnection = jest.fn<Connection>(() => ({
+        query: jest.fn(function (sqlString: string, queryCallback: (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => void) {
+            let results = null
+            let error = null
+            if (sqlString == `USE ${failureTestDBName}`) {
+               error = {errno: 400, name: 'test error', message: 'database does not exist', code: 'test', fatal: true}
+            }
+
+            queryCallback(error, results, null)
+        })
+    })
+    const mockConnection = new FailConditionMockConnection()
+    createConnection.mockReturnValue(mockConnection)
+    try {
+        await dummyTransformer.processMySQLSchemaOverJDBCWithCredentials(testDBUser, testDBPassword,  testDBHost, failureTestDBName)
+        jest.fail()
+    } catch (err) {
+        if (err instanceof RelationalDBParsingException) {
+            // expected
+        } else {
+            jest.fail()
+        }
+
+    }
+    expect(mockConnection.query).toHaveBeenCalledWith(`USE ${failureTestDBName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenLastCalledWith(`USE ${failureTestDBName}`, expect.any(Function))
+    expect(mockConnection.query).not.toHaveBeenCalledWith(`SHOW TABLES`, expect.any(Function))
+})
+
+test('Test list tables fails', async() => {
+    const FailConditionMockConnection = jest.fn<Connection>(() => ({
+        query: jest.fn(function (sqlString: string, queryCallback: (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => void) {
+            let results = null
+            let error = null
+            if (sqlString == `SHOW TABLES`) {
+                error = {errno: 400, name: 'test error', message: 'no tables exist', code: 'test', fatal: true}
+            } else if (sqlString == `USE ${failureTestDBName}`) {
+                // If it's the use db, we don't need a response
+                results = ''
+            } 
+
+            queryCallback(error, results, null)
+        })
+    })
+    const mockConnection = new FailConditionMockConnection()
+    createConnection.mockReturnValue(mockConnection)
+    try {
+        await dummyTransformer.processMySQLSchemaOverJDBCWithCredentials(testDBUser, testDBPassword,  testDBHost, failureTestDBName)
+        jest.fail()
+    } catch (err) {
+        if (err instanceof RelationalDBParsingException) {
+            // expected
+        } else {
+            jest.fail()
+        }
+
+    }
+    expect(mockConnection.query).toHaveBeenCalledWith(`USE ${failureTestDBName}`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenCalledWith(`SHOW TABLES`, expect.any(Function))
+    expect(mockConnection.query).toHaveBeenLastCalledWith(`SHOW TABLES`, expect.any(Function))
 })
 
 
