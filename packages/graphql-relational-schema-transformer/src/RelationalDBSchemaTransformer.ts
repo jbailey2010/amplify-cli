@@ -1,57 +1,86 @@
-import {createConnection, Connection, MysqlError, FieldInfo} from 'mysql'
-import { print, Kind, ObjectTypeDefinitionNode, NonNullTypeNode, DirectiveNode, NameNode,
-    OperationTypeNode, FieldDefinitionNode, NamedTypeNode, InputValueDefinitionNode, ValueNode,
-    OperationTypeDefinitionNode, SchemaDefinitionNode, ArgumentNode, ListValueNode, StringValueNode} from 'graphql'
-import RelationalDBTemplateGenerator from './RelationalDBTemplateGenerator'
-import { DocumentNode } from 'graphql'
+import { Kind, ObjectTypeDefinitionNode, SchemaDefinitionNode,
+    InputObjectTypeDefinitionNode, DocumentNode} from 'graphql'
+import { getNamedType, getOperationFieldDefinition, getNonNullType, getInputValueDefinition,
+    getTypeDefinition, getFieldDefinition, getDirectiveNode, getOperationTypeDefinition } from './RelationalDBSchemaTransformerUtils'
+import { IRelationalDBReader } from './IRelationalDBReader';
+import { MySQLRelationalDBReader } from './MySQLRelationalDBReader';
 
-
-class TableContext {
+/**
+ * This class is used to transition all of the columns and key metadata from a table for use
+ * in generating appropriate GraphQL schema structures. It will track type definitions for
+ * the base table, update mutation inputs, create mutation inputs, and primary key metadata.
+ */
+export class TableContext {
     tableTypeDefinition: ObjectTypeDefinitionNode
-    createTypeDefinition: ObjectTypeDefinitionNode
-    updateTypeDefinition: ObjectTypeDefinitionNode
+    createTypeDefinition: InputObjectTypeDefinitionNode
+    updateTypeDefinition: InputObjectTypeDefinitionNode
+    // Table primary key metadata, to help properly key queries and mutations.
     tableKeyField: string
     tableKeyFieldType: string
-    constructor(typeDefinition: ObjectTypeDefinitionNode, createDefinition: ObjectTypeDefinitionNode,
-         updateDefinition: ObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string) {
+    stringFieldList: string[]
+    intFieldList: string[]
+    constructor(typeDefinition: ObjectTypeDefinitionNode, createDefinition: InputObjectTypeDefinitionNode,
+         updateDefinition: InputObjectTypeDefinitionNode, primaryKeyField: string, primaryKeyType: string,
+         stringFieldList: string[], intFieldList: string[]) {
         this.tableTypeDefinition = typeDefinition
         this.tableKeyField = primaryKeyField
         this.createTypeDefinition = createDefinition
         this.updateTypeDefinition = updateDefinition
         this.tableKeyFieldType = primaryKeyType
+        this.stringFieldList = stringFieldList
+        this.intFieldList = intFieldList
     }
 }
 
-class SchemaContext {
+/**
+ * This class is used to transition all of the information needed to generate the
+ * CloudFormation template. This is the class that is outputted by the SchemaTransformer and the one that
+ * RelationalDBTemplateGenerator takes in for the constructor. It tracks the graphql schema document,
+ * map of the primary keys for each of the types. It is also being used to track the CLI inputs needed
+ * for DataSource Creation, as data source creation is apart of the cfn template generation.
+ */
+export default class TemplateContext {
     schemaDoc: DocumentNode
     typePrimaryKeyMap: {}
-    constructor(schemaDoc: DocumentNode, typePrimaryKeyMap: {}) {
+    stringFieldMap: Map<string, string[]>
+    intFieldMap: Map<string, string[]>
+    secretStoreArn: string
+    rdsClusterIdentifier: string
+    databaseName: string
+    databaseSchema: string
+    region: string
+
+    constructor(schemaDoc: DocumentNode, typePrimaryKeyMap: {},
+        stringFieldMap: Map<string, string[]>, intFieldMap: Map<string, string[]>) {
         this.schemaDoc = schemaDoc
         this.typePrimaryKeyMap  = typePrimaryKeyMap
+        this.stringFieldMap = stringFieldMap
+        this.intFieldMap = intFieldMap
     }
 }
 
 export class RelationalDBSchemaTransformer {
-    intTypes = [`INTEGER`, `INT`, `SMALLINT`, `TINYINT`, `MEDIUMINT`, `BIGINT`, `BIT`]
-    floatTypes = [`FLOAT`, `DOUBLE`, `REAL`, `REAL_AS_FLOAT`, `DOUBLE PRECISION`, `DEC`, `DECIMAL`, `FIXED`, `NUMERIC`]
+    mySQLReader: IRelationalDBReader
 
-    public getSchemaWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, databaseName: string): Promise<SchemaContext> => {
-        const connection = createConnection({user: dbUser, password: dbPassword, host: dbHost})
-
-        this.deleteMe(databaseName, connection)
+    public processMySQLSchemaOverJDBCWithCredentials = async (dbUser: string, dbPassword: string, dbHost: string, 
+        databaseName: string): Promise<TemplateContext> => {
+        this.mySQLReader = new MySQLRelationalDBReader(dbUser, dbPassword, dbHost)
 
         // Set the working db to be what the user provides
-        this.setDatabase(databaseName, connection)
-
-        this.deleteMeTables(connection)
+        this.mySQLReader.begin(databaseName)
 
         // Get all of the tables within the provided db
-        const tableNames = await this.listTables(databaseName, connection)
+        const tableNames = await this.mySQLReader.listTables(databaseName)
 
         const typeContexts = new Array()
         const types = new Array()
+        const pkeyMap = {}
+        const stringFieldMap = new Map<string, string[]>()
+        const intFieldMap = new Map<string, string[]>()
+
         for (const tableName of tableNames) {
-            const type = await this.describeTable(tableName, databaseName, connection)
+            const type: TableContext = await this.mySQLReader.describeTable(tableName)
+            pkeyMap[tableName] = type.tableKeyField
             typeContexts.push(type)
             // Generate the 'connection' type for each table type definition
             types.push(this.getConnectionType(tableName))
@@ -61,9 +90,18 @@ export class RelationalDBSchemaTransformer {
             types.push(type.tableTypeDefinition)
             // Generate the update operation input for each table type definition
             types.push(type.updateTypeDefinition)
+
+            console.log(type.intFieldList)
+
+            // Update the field map with the new field lists for the current table
+            stringFieldMap.set(tableName, type.stringFieldList)
+            intFieldMap.set(tableName, type.intFieldList)
         }
 
-        connection.end()
+        console.log(stringFieldMap)
+        console.log(intFieldMap)
+
+        this.mySQLReader.end()
 
         // Generate the mutations and queries based on the table structures
         types.push(this.getMutations(typeContexts))
@@ -71,322 +109,129 @@ export class RelationalDBSchemaTransformer {
         types.push(this.getSubscriptions(typeContexts))
         types.push(this.getSchemaType())
 
-        const schemaCtx = new SchemaContext({kind: Kind.DOCUMENT, definitions: types}, {})
-        //console.log(schemaCtx.schemaDoc)
-        return schemaCtx
+        let context =  new TemplateContext({kind: Kind.DOCUMENT, definitions: types}, pkeyMap, stringFieldMap, intFieldMap)
+
+        /**
+         * TODO: Figure out the best approach to storing the cli inputs i.e. rds-cluster-identifier, secret-store-arn, etc.
+         * For now, will store as part of the TemplateContext
+         */
+        context.secretStoreArn =
+            'arn:aws:secretsmanager:us-east-1:973253135933:secret:rds-db-credentials/cluster-VG3LSXHGQMQZONK2AZV52IRKLE/ashwin-aJcCFy'
+        context.rdsClusterIdentifier = 'arn:aws:rds:us-east-1:973253135933:cluster:pets'
+        context.databaseSchema = 'mysql'
+        context.databaseName = 'pets'
+        context.region = 'us-east-1'
+
+         return context
     }
 
-    private getSchemaType(): SchemaDefinitionNode {
+    /**
+     * Creates a schema type definition node, including operations for each of query, mutation, and subscriptions.
+     *
+     * @returns a basic schema definition node.
+     */
+    getSchemaType(): SchemaDefinitionNode {
         return {
             kind: Kind.SCHEMA_DEFINITION,
             operationTypes: [
-                this.getOperationTypeDefinition('query', this.getNamedType('Query')),
-                this.getOperationTypeDefinition('mutation', this.getNamedType('Mutation')),
-                this.getOperationTypeDefinition('subscription', this.getNamedType('Subscription'))
+                getOperationTypeDefinition('query', getNamedType('Query')),
+                getOperationTypeDefinition('mutation', getNamedType('Mutation')),
+                getOperationTypeDefinition('subscription', getNamedType('Subscription'))
             ]
         }
     }
 
+    /**
+     * Generates the basic mutation operations, given the provided table contexts. This will
+     * create a create, delete, and update operation for each table.
+     *
+     * @param types the table contexts from which the mutations are to be generated.
+     * @returns the type definition for mutations, including a create, delete, and update for each table.
+     */
     private getMutations(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
             const type = typeContext.tableTypeDefinition
             fields.push(
-                this.getOperationFieldDefinition(`delete${type.name.value}`,
-                    [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
+                getOperationFieldDefinition(`delete${type.name.value}`,
+                    [getInputValueDefinition(getNonNullType(getNamedType(typeContext.tableKeyFieldType)),
                         typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`), null)
+                    getNamedType(`${type.name.value}`), null)
             )
             fields.push(
-                this.getOperationFieldDefinition(`create${type.name.value}`,
-                    [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Create${type.name.value}Input`)),
+                getOperationFieldDefinition(`create${type.name.value}`,
+                    [getInputValueDefinition(getNonNullType(getNamedType(`Create${type.name.value}Input`)),
                         `create${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`), null)
+                    getNamedType(`${type.name.value}`), null)
             )
             fields.push(
-                this.getOperationFieldDefinition(`update${type.name.value}`,
-                    [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(`Update${type.name.value}Input`)),
+                getOperationFieldDefinition(`update${type.name.value}`,
+                    [getInputValueDefinition(getNonNullType(getNamedType(`Update${type.name.value}Input`)),
                         `update${type.name.value}Input`)],
-                    this.getNamedType(`${type.name.value}`), null)
+                    getNamedType(`${type.name.value}`), null)
             )
         }
-        return this.getTypeDefinition(fields, 'Mutation')
+        return getTypeDefinition(fields, 'Mutation')
     }
 
+    /**
+     * Generates the basic subscription operations, given the provided table contexts. This will
+     * create an onCreate subscription for each table.
+     *
+     * @param types the table contexts from which the subscriptions are to be generated.
+     * @returns the type definition for subscriptions, including an onCreate for each table.
+     */
     private getSubscriptions(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
             const type = typeContext.tableTypeDefinition
             fields.push(
-                this.getOperationFieldDefinition(`onCreate${type.name.value}`, [],
-                    this.getNamedType(`${type.name.value}`),
-                    [this.getDirectiveNode(`create${type.name.value}`)])
+                getOperationFieldDefinition(`onCreate${type.name.value}`, [],
+                    getNamedType(`${type.name.value}`),
+                    [getDirectiveNode(`create${type.name.value}`)])
             )
         }
-        return this.getTypeDefinition(fields, 'Subscription')
+        return getTypeDefinition(fields, 'Subscription')
     }
 
+    /**
+     * Generates the basic query operations, given the provided table contexts. This will
+     * create a get and list operation for each table.
+     *
+     * @param types the table contexts from which the queries are to be generated.
+     * @returns the type definition for queries, including a get and list for each table.
+     */
     private getQueries(types: TableContext[]): ObjectTypeDefinitionNode {
         const fields = []
         for (const typeContext of types) {
             const type = typeContext.tableTypeDefinition
             fields.push(
-                this.getOperationFieldDefinition(`get${type.name.value}`,
-                    [this.getInputValueDefinition(this.getNonNullType(this.getNamedType(typeContext.tableKeyFieldType)),
-                            typeContext.tableKeyField)],
-                    this.getNamedType(`${type.name.value}`), null)
-                )
+                getOperationFieldDefinition(`get${type.name.value}`,
+                [getInputValueDefinition(getNonNullType(getNamedType(typeContext.tableKeyFieldType)),
+                    typeContext.tableKeyField)],
+                getNamedType(`${type.name.value}`), null)
+            )
             fields.push(
-                this.getOperationFieldDefinition(`list${type.name.value}s`,
-                    [this.getInputValueDefinition(this.getNamedType('String'), 'nextToken')],
-                    this.getNamedType(`${type.name.value}Connection`), null)
-                )
-            }
-        return this.getTypeDefinition(fields, 'Query')
-    }
-
-    private setDatabase = async (databaseName: string, connection: Connection): Promise<void> => {
-        await this.executeSQL(`USE ${databaseName}`, connection)
-    }
-
-    private listTables = async (databaseName: string, connection: Connection): Promise<string[]> => {
-        const results = await this.executeSQL(`SHOW TABLES`, connection)
-        return results.map(result => result[`Tables_in_${databaseName}`])
-    }
-
-    private getTableForReferencedTable = async (databaseName: string,
-         tableName: string, connection: Connection) : Promise<string[]> => {
-        const results = await this.executeSQL
-            (`SELECT TABLE_NAME FROM information_schema.key_column_usage
-            WHERE referenced_table_name is not null
-            AND REFERENCED_TABLE_NAME = '${tableName}';`, connection)
-        return results.map(result => result[`TABLE_NAME`])
-    }
-
-    private describeTable = async (tableName: string, dbName: string, connection: Connection): Promise<TableContext> => {
-        const columnDescriptions = await this.executeSQL(`DESCRIBE ${tableName}`, connection)
-        // Fields in the general type (e.g. Post). Both the identifying field and any others the db dictates will be required.
-        const fields = new Array()
-        // Fields in the update input type (e.g. UpdatePostInput). Only the identifying field will be required, any others will be optional.
-        const updateFields = new Array()
-        // Field in the create input type (e.g. CreatePostInput).
-        const createFields = new Array()
-
-        // The primary key, used to help generate queries and mutations
-        let primaryKey = ""
-        let primaryKeyType = ""
-
-        for (const columnDescription of columnDescriptions) {
-            // If a field is the primary key, save it.
-            if (columnDescription.Key == 'PRI') {
-                primaryKey = columnDescription.Field
-                primaryKeyType = this.getGraphQLType(columnDescription.Type)
-            } else if (columnDescription.Key == 'MUL') {
-                // TODO: foreign key!
-            }
-
-            // Create the basic field type shape, to be consumed by every field definition
-            const baseType = this.getNamedType(this.getGraphQLType(columnDescription.Type))
-
-            const isPrimaryKey = columnDescription.Key == 'PRI'
-            const isNullable = columnDescription.Null == 'YES'
-
-            // Generate the field for the general type and the create input type
-            const type = (!isPrimaryKey && isNullable) ? baseType : this.getNonNullType(baseType)
-            fields.push(this.getFieldDefinition(columnDescription.Field, type))
-
-            createFields.push(this.getFieldDefinition(columnDescription.Field, type))
-
-            // Update<type>Input has only the primary key as required, ignoring all other that the database requests as non-nullable
-            const updateType = !isPrimaryKey ? baseType : this.getNonNullType(baseType)
-            updateFields.push(this.getFieldDefinition(columnDescription.Field, updateType))
-            // TODO: foreign key backwards to get nested types?`
+                getOperationFieldDefinition(`list${type.name.value}s`,
+                [getInputValueDefinition(getNamedType('String'), 'nextToken')],
+                getNamedType(`${type.name.value}Connection`), null)
+            )
         }
-
-        // Add foreign key for this table
-        let tablesWithRef = await this.getTableForReferencedTable(dbName, tableName, connection)
-        for (const tableWithRef of tablesWithRef) {
-            if (tableWithRef && tableWithRef.length > 0) {
-                const baseType = this.getNamedType(`${tableWithRef}Connection`)
-                fields.push(this.getFieldDefinition(`${tableWithRef}`, baseType))
-            }
-        }
-
-        return new TableContext(this.getTypeDefinition(fields, tableName), this.getTypeDefinition(createFields, `Create${tableName}Input`),
-                this.getTypeDefinition(updateFields, `Update${tableName}Input`), primaryKey, primaryKeyType)
+        return getTypeDefinition(fields, 'Query')
     }
 
-    private getOperationTypeDefinition(operationType: OperationTypeNode, operation: NamedTypeNode): OperationTypeDefinitionNode {
-        return {
-            kind: Kind.OPERATION_TYPE_DEFINITION,
-            operation: operationType,
-            type: operation
-        }
-    }
-
-    private getNonNullType(typeNode: NamedTypeNode): NonNullTypeNode {
-        return {
-            kind: Kind.NON_NULL_TYPE,
-            type: typeNode
-        }
-    }
-
-    private getNamedType(name: string): NamedTypeNode {
-        return {
-            kind: Kind.NAMED_TYPE,
-            name: {
-                kind: Kind.NAME,
-                value: name
-            }
-        }
-    }
-
-    private getInputValueDefinition(typeNode: NamedTypeNode | NonNullTypeNode, name: string): InputValueDefinitionNode {
-        return {
-            kind: Kind.INPUT_VALUE_DEFINITION,
-            name: {
-                kind: Kind.NAME,
-                value: name
-            },
-            type: typeNode
-        }
-    }
-
-    private getOperationFieldDefinition(name: string, args: InputValueDefinitionNode[], type: NamedTypeNode, directives: ReadonlyArray<DirectiveNode>): FieldDefinitionNode {
-        return {
-            kind: Kind.FIELD_DEFINITION,
-            name: {
-                kind: Kind.NAME,
-                value: name
-            },
-            arguments: args,
-            type: type,
-            directives: directives
-        }
-    }
-
-    private getFieldDefinition(fieldName: string, type: NonNullTypeNode | NamedTypeNode): FieldDefinitionNode {
-        return {
-            kind: Kind.FIELD_DEFINITION,
-            name: {
-                kind: Kind.NAME,
-                value: fieldName
-            },
-            type
-        }
-    }
-
-    private getTypeDefinition(fields: ReadonlyArray<FieldDefinitionNode>, typeName: string): ObjectTypeDefinitionNode {
-        return {
-            kind: Kind.OBJECT_TYPE_DEFINITION,
-            name: {
-                kind: Kind.NAME,
-                value: typeName
-            },
-            fields: fields
-        }
-    }
-
-    private getNameNode(name: string): NameNode {
-        return {
-            kind: Kind.NAME,
-            value: name
-        }        
-    }
-
-    private getListValueNode(values: ReadonlyArray<ValueNode>): ListValueNode {
-        return {
-            kind: Kind.LIST,
-            values: values
-        }
-    }
-
-    private getStringValueNode(value: string): StringValueNode {
-        return {
-            kind: Kind.STRING,
-            value: value
-        }
-    }    
-
-    private getDirectiveNode(mutationName: string): DirectiveNode {
-        return {
-            kind: Kind.DIRECTIVE,
-            name: this.getNameNode('aws_subscribe'),
-            arguments: [this.getArgumentNode(mutationName)]
-        }
-    }
-
-    private getArgumentNode(argument: string): ArgumentNode {
-        return {
-            kind: Kind.ARGUMENT,
-            name: this.getNameNode('mutations'),
-            value: this.getListValueNode([this.getStringValueNode(argument)])
-        }
-    }
-
-    private getConnectionType(tableName: string): ObjectTypeDefinitionNode {
-        return this.getTypeDefinition(
+    /**
+     * Creates a GraphQL connection type for a given GraphQL type, corresponding to a SQL table name.
+     *
+     * @param tableName the name of the SQL table (and GraphQL type).
+     * @returns a type definition node defining the connection type for the provided type name.
+     */
+    getConnectionType(tableName: string): ObjectTypeDefinitionNode {
+        return getTypeDefinition(
             [
-                this.getFieldDefinition('items', this.getNamedType(`[${tableName}]`)),
-                this.getFieldDefinition('nextToken', this.getNamedType('String'))
+                getFieldDefinition('items', getNamedType(`[${tableName}]`)),
+                getFieldDefinition('nextToken', getNamedType('String'))
             ],
             `${tableName}Connection`)
     }
-
-    private deleteMe = async (databaseName: string, connection: Connection): Promise<void> => {
-        await this.executeSQL(`CREATE DATABASE IF NOT EXISTS ${databaseName}`, connection)
-    }
-
-    private deleteMeTables = async (connection: Connection): Promise<void> => {
-        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS testTable2 (id INT(100), testId INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test1 (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-        // await this.executeSQL(`CREATE TABLE IF NOT EXISTS Test2 (id INT(100), testId INT(100),
-        //  name TINYTEXT, PRIMARY KEY(id), FOREIGN KEY(testId) REFERENCES Test1(id))`, connection)
-        await this.executeSQL(`CREATE TABLE IF NOT EXISTS Dogs (id INT(100), name TINYTEXT, PRIMARY KEY(id))`, connection)
-    }
-
-    private executeSQL = async (sqlString: string, connection: Connection): Promise<any> => {
-        return await new Promise<FieldInfo[]>((resolve, reject) => {
-            connection.query(sqlString, (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => {
-                if (err) {
-                    console.log(`Failed to execute ${sqlString}`)
-                    reject(err)
-                }
-                resolve(results)
-            })
-        })
-    }
-
-    private getGraphQLType(dbType: string): string {
-        const normalizedType = dbType.toUpperCase().split("(")[0]
-        if (`BOOL` == normalizedType) {
-            return `Boolean`
-        } else if (`JSON` == normalizedType) {
-            return `AWSJSON`
-        } else if (`TIME` == normalizedType) {
-            return `AWSTime`
-        } else if (`DATE` == normalizedType) {
-            return `AWSDate`
-        } else if (`DATETIME` == normalizedType) {
-            return `AWSDateTime`
-        } else if (`TIMESTAMP` == normalizedType) {
-            return `AWSTimestamp`
-        } else if (this.intTypes.indexOf(normalizedType) > -1) {
-            return `Int`
-        } else if (this.floatTypes.indexOf(normalizedType) > -1) {
-            return `Float`
-        }
-        return `String`
-    }
 }
-
-let testClass = new RelationalDBSchemaTransformer()
-let result = testClass.getSchemaWithCredentials("root", "ashy", "localhost", "testdb")
-
-result.then(function(data: SchemaContext) {
-    console.log(print(data.schemaDoc))
-
-    let templateClass = new RelationalDBTemplateGenerator(data.schemaDoc)
-    console.log(templateClass.createTemplate())
-})

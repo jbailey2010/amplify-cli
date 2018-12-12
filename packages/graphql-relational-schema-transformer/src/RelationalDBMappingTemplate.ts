@@ -1,13 +1,18 @@
-// Mapping Template for Relational DB
 import {
-    obj, ref, Expression, ReferenceNode, StringNode,
-    IntNode, FloatNode, str, ObjectNode, compoundExpression,
-    set, list, forEach, ifElse, qref, iff, raw,
-    CompoundExpressionNode,
-    ListNode
-} from './ast';
+    obj, str, ObjectNode, ListNode
+} from 'graphql-mapping-template';
 
+/**
+ * The class that contains the resolver templates for interacting
+ * with the Relational Database data source.
+ */
 export default class RelationalDBMappingTemplate {
+
+    /**
+     * Provided a SQL statement, creates the rds-query item resolver template.
+     *
+     * @param param0 - the SQL statement to use when querying the RDS cluster
+     */
     public static rdsQuery({statements}: {
         statements: ListNode
     }): ObjectNode {
