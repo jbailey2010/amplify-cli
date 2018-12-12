@@ -2,8 +2,10 @@ import { Kind, ObjectTypeDefinitionNode, SchemaDefinitionNode,
     InputObjectTypeDefinitionNode, DocumentNode} from 'graphql'
 import { getNamedType, getOperationFieldDefinition, getNonNullType, getInputValueDefinition,
     getTypeDefinition, getFieldDefinition, getDirectiveNode, getOperationTypeDefinition } from './RelationalDBSchemaTransformerUtils'
-import { IRelationalDBReader } from './IRelationalDBReader';
-import { MySQLRelationalDBReader } from './MySQLRelationalDBReader';
+import { IRelationalDBReader } from './IRelationalDBReader'
+import { MySQLRelationalDBReader } from './MySQLRelationalDBReader'
+import {RelationalDBParsingException} from './RelationalDBParsingException'
+import { rejects } from 'assert';
 
 /**
  * This class is used to transition all of the columns and key metadata from a table for use
@@ -67,10 +69,19 @@ export class RelationalDBSchemaTransformer {
         this.mySQLReader = new MySQLRelationalDBReader(dbUser, dbPassword, dbHost)
 
         // Set the working db to be what the user provides
-        this.mySQLReader.begin(databaseName)
+        try {
+            await this.mySQLReader.begin(databaseName)
+        } catch (err) {
+            throw new RelationalDBParsingException(`Failed to set database to ${databaseName}`, err.stack)
+        }
 
         // Get all of the tables within the provided db
-        const tableNames = await this.mySQLReader.listTables(databaseName)
+        let tableNames = null
+        try {
+            tableNames = await this.mySQLReader.listTables(databaseName)
+        } catch (err) {
+            throw new RelationalDBParsingException(`Failed to list tables in ${databaseName}`, err.stack)
+        }
 
         const typeContexts = new Array()
         const types = new Array()
@@ -79,8 +90,13 @@ export class RelationalDBSchemaTransformer {
         const intFieldMap = new Map<string, string[]>()
 
         for (const tableName of tableNames) {
-            const type: TableContext = await this.mySQLReader.describeTable(tableName)
-            pkeyMap[tableName] = type.tableKeyField
+            let type: TableContext = null
+            try {
+                type = await this.mySQLReader.describeTable(tableName)
+            } catch (err) {
+                throw new RelationalDBParsingException(`Failed to describe table ${tableName}`, err.stack)
+            }
+
             typeContexts.push(type)
             // Generate the 'connection' type for each table type definition
             types.push(this.getConnectionType(tableName))
