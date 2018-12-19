@@ -10,12 +10,12 @@ let testClass = new RelationalDBSchemaTransformer()
 let result = testClass.processMySQLSchemaOverJDBCWithCredentials("root", "ashy", "localhost", "testdb")
 
 result.then(function(data: TemplateContext) {
-    //console.log(print(data.schemaDoc))
+    console.log(print(data.schemaDoc))
 
     let templateGenerator = new RelationalDBTemplateGenerator(data)
     //console.log(templateClass.addRelationalResolvers(templateClass.createTemplate()))
     let template = templateGenerator.createTemplate()
     template = templateGenerator.addRelationalResolvers(template)
     //console.log(template)
-    // console.log(templateGenerator.printCloudformationTemplate(template))
+    console.log(templateGenerator.printCloudformationTemplate(template))
 })

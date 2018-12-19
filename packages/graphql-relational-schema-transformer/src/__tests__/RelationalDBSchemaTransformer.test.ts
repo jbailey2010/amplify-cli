@@ -100,7 +100,7 @@ test('Test schema generation end to end', async() => {
     let objectTypeCount = 0
     let inputTypeCount = 0
     let schemaTypeCount = 0
-    for(const node of templateContext.schemaDoc.definitions) {
+    for (const node of templateContext.schemaDoc.definitions) {
         if (node.kind === Kind.OBJECT_TYPE_DEFINITION) {
             objectTypeCount++
         } else if (node.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION) {
@@ -122,7 +122,7 @@ test('Test begin fails on database selection', async() => {
         query: jest.fn(function (sqlString: string, queryCallback: (err: MysqlError | null, results?: any, fields?: FieldInfo[]) => void) {
             let results = null
             let error = null
-            if (sqlString == `USE ${failureTestDBName}`) {
+            if (sqlString === `USE ${failureTestDBName}`) {
                error = {errno: 400, name: 'test error', message: 'database does not exist', code: 'test', fatal: true}
             }
 

@@ -33,7 +33,7 @@ export default class RelationalDBResolverGenerator {
      * merged with an existing Template's map of Resources.
      */
     public createRelationalResolvers() {
-        let resources = {}
+        let resources: { [key: string]: any } = {}
         Object.keys(this.typePrimaryKeyMap).forEach(element => {
             resources = {
                 ...resources,
@@ -41,7 +41,7 @@ export default class RelationalDBResolverGenerator {
                 ...{[element + 'GetResolver']: this.makeGetRelationalResolver(element)},
                 ...{[element + 'UpdateResolver']: this.makeUpdateRelationalResolver(element)},
                 ...{[element + 'DeleteResolver']: this.makeDeleteRelationalResolver(element)},
-                ...{[element + 'ListResolver']: this.makeListRelationalResolver(element)}
+                ...{[element + 'ListResolver']: this.makeListRelationalResolver(element)},
             }
             // TODO: Add Guesstimate Query Resolvers
         })
@@ -226,18 +226,5 @@ export default class RelationalDBResolverGenerator {
         })
 
         return resolver
-    }
-
-    private makeIntFieldQueryResolvers(type: string) {
-        let queryResolvers = {}
-        return queryResolvers
-    }
-
-    private makeStringFieldQueryResolvers(type: string) {
-        let queryResolvers = {}
-        this.stringFieldMap.get(type).forEach(element => {
-            console.log(element)
-        });
-        return queryResolvers
     }
 }

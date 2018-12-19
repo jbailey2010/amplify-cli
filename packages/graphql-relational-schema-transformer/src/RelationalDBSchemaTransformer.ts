@@ -5,7 +5,6 @@ import { getNamedType, getOperationFieldDefinition, getNonNullType, getInputValu
 import { IRelationalDBReader } from './IRelationalDBReader'
 import { MySQLRelationalDBReader } from './MySQLRelationalDBReader'
 import {RelationalDBParsingException} from './RelationalDBParsingException'
-import { rejects } from 'assert';
 
 /**
  * This class is used to transition all of the columns and key metadata from a table for use
@@ -107,15 +106,10 @@ export class RelationalDBSchemaTransformer {
             // Generate the update operation input for each table type definition
             types.push(type.updateTypeDefinition)
 
-            console.log(type.intFieldList)
-
             // Update the field map with the new field lists for the current table
             stringFieldMap.set(tableName, type.stringFieldList)
             intFieldMap.set(tableName, type.intFieldList)
         }
-
-        console.log(stringFieldMap)
-        console.log(intFieldMap)
 
         this.mySQLReader.end()
 
